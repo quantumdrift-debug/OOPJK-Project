@@ -1,0 +1,492 @@
+mport java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+
+/**
+ * Central Library Digital Book Reservation & Overdue Fine Calculator
+ * Single-file Java implementation for a college OOP project.
+ *
+ * Compile: javac CentralLibrarySystem.java
+ * Run:     java CentralLibrarySystem
+ */
+public class CentralLibrarySystem {
+
+    private static final Scanner SCANNER = new Scanner(System.in);
+    private static final LibrarySystem LIBRARY = new LibrarySystem();
+
+    public static void main(String[] args) {
+        LIBRARY.seedDemoData();
+
+        System.out.println("==================================================");
+        System.out.println(" CENTRAL LIBRARY DIGITAL BOOK RESERVATION SYSTEM");
+        System.out.println("==================================================");
+        System.out.println("Demo data loaded: S101 (student), F101 (faculty),");
+        System.out.println("and sample books. You may add more from the menu.");
+
+        boolean running = true;
+        while (running) {
+            printMenu();
+            int choice = readInt("Enter your choice: ");
+            try {
+                switch (choice) {
+                    case 1 -> registerStudent();
+                    case 2 -> registerFaculty();
+                    case 3 -> addBook();
+                    case 4 -> LIBRARY.displayBooks();
+                    case 5 -> LIBRARY.displayMembers();
+                    case 6 -> borrowBook();
+                    case 7 -> returnBook();
+                    case 8 -> LIBRARY.displayLoans();
+                    case 9 -> LIBRARY.displayReservations();
+                    case 10 -> LIBRARY.displayFineThreshold();
+                    case 0 -> {
+                        running = false;
+                        System.out.println("Thank you for using the Central Library System.");
+                    }
+                    default -> System.out.println("Invalid menu choice. Try again.");
+                }
+            } catch (BookUnavailableException | MaxFineThresholdExceededException
+                     | IllegalArgumentException | IllegalStateException ex) {
+                System.out.println("ERROR: " + ex.getMessage());
+            } catch (Exception ex) {
+                System.out.println("Unexpected error: " + ex.getMessage());
+            }
+            System.out.println();
+        }
+    }
+
+    private static void printMenu() {
+        System.out.println("\n-------------------- MENU --------------------");
+        System.out.println("1. Register student");
+        System.out.println("2. Register faculty");
+        System.out.println("3. Add book");
+        System.out.println("4. View all books");
+        System.out.println("5. View all members");
+        System.out.println("6. Borrow book");
+        System.out.println("7. Return book");
+        System.out.println("8. View loan records");
+        System.out.println("9. View reservation queues");
+        System.out.println("10. View fine threshold");
+        System.out.println("0. Exit");
+        System.out.println("----------------------------------------------");
+    }
+
+    private static void registerStudent() {
+        String id = readNonEmpty("Student member ID: ");
+        String name = readNonEmpty("Student name: ");
+        LIBRARY.registerMember(new StudentMember(id, name));
+        System.out.println("Student registered successfully.");
+    }
+
+    private static void registerFaculty() {
+        String id = readNonEmpty("Faculty member ID: ");
+        String name = readNonEmpty("Faculty name: ");
+        LIBRARY.registerMember(new FacultyMember(id, name));
+        System.out.println("Faculty member registered successfully.");
+    }
+
+    private static void addBook() {
+        String isbn = readNonEmpty("ISBN: ");
+        String title = readNonEmpty("Title: ");
+        String author = readNonEmpty("Author: ");
+        int copies = readInt("Total copies (at least 1): ");
+        LIBRARY.addBook(new Book(isbn, title, author, copies));
+        System.out.println("Book added successfully.");
+    }
+
+    private static void borrowBook() throws BookUnavailableException {
+        String memberId = readNonEmpty("Member ID: ");
+        String isbn = readNonEmpty("Book ISBN: ");
+        LocalDate borrowDate = readDate("Borrow date (YYYY-MM-DD): ");
+        Loan loan = LIBRARY.borrowBook(memberId, isbn, borrowDate);
+        System.out.println("Book borrowed successfully.");
+        System.out.println("Loan ID: " + loan.getLoanId());
+        System.out.println("Member: " + loan.getMember().getName());
+        System.out.println("Book: " + loan.getBook().getTitle());
+        System.out.println("Borrow date: " + loan.getBorrowDate());
+        System.out.println("Due date: " + loan.getDueDate());
+    }
+
+    private static void returnBook()
+            throws MaxFineThresholdExceededException {
+        String loanId = readNonEmpty("Loan ID to return: ");
+        LocalDate returnDate = readDate("Return date (YYYY-MM-DD): ");
+        ReturnResult result = LIBRARY.returnBook(loanId, returnDate);
+        System.out.println("Book returned successfully.");
+        System.out.println("Overdue days: " + result.overdueDays);
+        System.out.println("Fine: Rs. " + result.fine);
+        if (result.reservationMessage != null) {
+            System.out.println("RESERVATION ALERT: " + result.reservationMessage);
+        }
+    }
+
+    private static String readNonEmpty(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String value = SCANNER.nextLine().trim();
+            if (!value.isEmpty()) return value;
+            System.out.println("Value cannot be empty.");
+        }
+    }
+
+    private static int readInt(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String value = SCANNER.nextLine().trim();
+            try {
+                return Integer.parseInt(value);
+            } catch (NumberFormatException ex) {
+                System.out.println("Please enter a whole number.");
+            }
+        }
+    }
+
+    private static LocalDate readDate(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String value = SCANNER.nextLine().trim();
+            try {
+                return LocalDate.parse(value);
+            } catch (Exception ex) {
+                System.out.println("Invalid date. Use YYYY-MM-DD, for example 2026-10-25.");
+            }
+        }
+    }
+
+    // ---------- Application/service layer ----------
+
+    static class LibrarySystem {
+        private final Map<String, LibraryMember> members = new LinkedHashMap<>();
+        private final Map<String, Book> books = new LinkedHashMap<>();
+        private final Map<String, Loan> loans = new LinkedHashMap<>();
+        private final Set<String> processedReturns = new HashSet<>();
+        private static final long MAX_FINE_RUPEES = 500L;
+
+        void seedDemoData() {
+            registerMember(new StudentMember("S101", "Aarav Student"));
+            registerMember(new FacultyMember("F101", "Dr. Meera Faculty"));
+            addBook(new Book("978-0131103627", "Operating System Concepts", "Silberschatz", 1));
+            addBook(new Book("978-0132350884", "Clean Code", "Robert C. Martin", 3));
+            addBook(new Book("978-0262033848", "Introduction to Algorithms", "Cormen et al.", 2));
+        }
+
+        void registerMember(LibraryMember member) {
+            if (members.containsKey(member.getMemberId())) {
+                throw new IllegalArgumentException("A member with that ID already exists.");
+            }
+            members.put(member.getMemberId(), member);
+        }
+
+        void addBook(Book book) {
+            if (books.containsKey(book.getIsbn())) {
+                throw new IllegalArgumentException("A book with that ISBN already exists.");
+            }
+            books.put(book.getIsbn(), book);
+        }
+
+        Loan borrowBook(String memberId, String isbn, LocalDate borrowDate)
+                throws BookUnavailableException {
+            LibraryMember member = requireMember(memberId);
+            Book book = requireBook(isbn);
+
+            if (borrowDate.isAfter(LocalDate.now())) {
+                throw new IllegalArgumentException("Borrow date cannot be in the future.");
+            }
+            if (member.getActiveLoanCount() >= member.getMaxBooks()) {
+                throw new IllegalStateException(
+                        member.getName() + " has reached the borrowing limit of "
+                                + member.getMaxBooks() + " book(s).");
+            }
+
+            // Avoid duplicate active loans of the same title by the same member.
+            boolean alreadyHasBook = loans.values().stream()
+                    .anyMatch(loan -> loan.getMember().getMemberId().equals(memberId)
+                            && loan.getBook().getIsbn().equals(isbn)
+                            && !loan.isReturned());
+            if (alreadyHasBook) {
+                throw new IllegalStateException("This member already has an active loan for this book.");
+            }
+
+            if (book.getAvailableCopies() <= 0) {
+                boolean alreadyWaiting = book.getReservationQueue().stream()
+                        .anyMatch(m -> m.getMemberId().equals(memberId));
+                if (!alreadyWaiting) {
+                    book.getReservationQueue().add(member);
+                }
+                throw new BookUnavailableException(
+                        "No copies of \"" + book.getTitle() + "\" are available. "
+                                + (alreadyWaiting ? "You are already on the waitlist."
+                                : "Member " + memberId + " has been added to the reservation queue."));
+            }
+
+            book.issueCopy();
+            Loan loan = new Loan(member, book, borrowDate);
+            loans.put(loan.getLoanId(), loan);
+            member.addActiveLoan(loan);
+            return loan;
+        }
+
+        ReturnResult returnBook(String loanId, LocalDate returnDate)
+                throws MaxFineThresholdExceededException {
+            Loan loan = loans.get(loanId);
+            if (loan == null) throw new IllegalArgumentException("Loan ID not found.");
+            if (loan.isReturned()) throw new IllegalStateException("This loan has already been returned.");
+            if (returnDate.isBefore(loan.getBorrowDate())) {
+                throw new IllegalArgumentException("Return date cannot be before the borrow date.");
+            }
+
+            long fine = FineCalculator.calculateFine(loan.getDueDate(), returnDate);
+            long overdueDays = Math.max(0L, ChronoUnit.DAYS.between(loan.getDueDate(), returnDate));
+
+            // Return is recorded even if the fine is above the threshold; exception flags the fine.
+            loan.completeReturn(returnDate, fine);
+            loan.getMember().removeActiveLoan(loan);
+            String reservationMessage = loan.getBook().acceptReturnedCopyAndReserveNext();
+
+            if (fine > MAX_FINE_RUPEES) {
+                throw new MaxFineThresholdExceededException(
+                        "Fine is Rs. " + fine + ", exceeding the configured maximum of Rs. "
+                                + MAX_FINE_RUPEES + ". The return was recorded; refer the fine for review.");
+            }
+            return new ReturnResult(overdueDays, fine, reservationMessage);
+        }
+
+        LibraryMember requireMember(String id) {
+            LibraryMember member = members.get(id);
+            if (member == null) throw new IllegalArgumentException("Member ID not found.");
+            return member;
+        }
+
+        Book requireBook(String isbn) {
+            Book book = books.get(isbn);
+            if (book == null) throw new IllegalArgumentException("Book ISBN not found.");
+            return book;
+        }
+
+        void displayBooks() {
+            System.out.println("\nBOOK CATALOG");
+            if (books.isEmpty()) { System.out.println("No books registered."); return; }
+            for (Book b : books.values()) {
+                System.out.printf("ISBN: %s | %s | Author: %s | Available: %d/%d | Waiting: %d%n",
+                        b.getIsbn(), b.getTitle(), b.getAuthor(),
+                        b.getAvailableCopies(), b.getTotalCopies(), b.getReservationQueue().size());
+            }
+        }
+
+        void displayMembers() {
+            System.out.println("\nMEMBERS");
+            if (members.isEmpty()) { System.out.println("No members registered."); return; }
+            for (LibraryMember m : members.values()) {
+                System.out.printf("ID: %s | Name: %s | Type: %s | Active loans: %d/%d | Loan period: %d days%n",
+                        m.getMemberId(), m.getName(), m.getClass().getSimpleName(),
+                        m.getActiveLoanCount(), m.getMaxBooks(), m.getLoanDays());
+            }
+        }
+
+        void displayLoans() {
+            System.out.println("\nLOAN RECORDS");
+            if (loans.isEmpty()) { System.out.println("No loans yet."); return; }
+            for (Loan l : loans.values()) {
+                System.out.printf("Loan ID: %s | Member: %s (%s) | Book: %s | Borrowed: %s | Due: %s | ",
+                        l.getLoanId(), l.getMember().getName(), l.getMember().getMemberId(),
+                        l.getBook().getTitle(), l.getBorrowDate(), l.getDueDate());
+                if (l.isReturned()) {
+                    System.out.printf("Returned: %s | Fine: Rs. %d%n", l.getReturnDate(), l.getFinePaidOrOwed());
+                } else {
+                    System.out.println("ACTIVE");
+                }
+            }
+        }
+
+        void displayReservations() {
+            System.out.println("\nRESERVATION QUEUES");
+            boolean any = false;
+            for (Book b : books.values()) {
+                if (!b.getReservationQueue().isEmpty()) {
+                    any = true;
+                    System.out.println(b.getTitle() + " (" + b.getIsbn() + "):");
+                    int position = 1;
+                    for (LibraryMember member : b.getReservationQueue()) {
+                        System.out.println("  " + position++ + ". " + member.getName()
+                                + " [" + member.getMemberId() + "]");
+                    }
+                }
+            }
+            if (!any) System.out.println("No active reservation queues.");
+        }
+
+        void displayFineThreshold() {
+            System.out.println("Configured maximum fine threshold: Rs. " + MAX_FINE_RUPEES);
+            System.out.println("This is a configurable project assumption; confirm the required value with your lecturer.");
+        }
+    }
+
+    // ---------- Domain model ----------
+
+    static abstract class LibraryMember {
+        private final String memberId;
+        private final String name;
+        private final List<Loan> activeLoans = new ArrayList<>();
+
+        protected LibraryMember(String memberId, String name) {
+            if (memberId == null || memberId.isBlank()) throw new IllegalArgumentException("Member ID is required.");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("Member name is required.");
+            this.memberId = memberId;
+            this.name = name;
+        }
+
+        public String getMemberId() { return memberId; }
+        public String getName() { return name; }
+        public abstract int getMaxBooks();
+        public abstract int getLoanDays();
+
+        public int getActiveLoanCount() { return activeLoans.size(); }
+        public List<Loan> getActiveLoans() { return Collections.unmodifiableList(activeLoans); }
+
+        private void addActiveLoan(Loan loan) { activeLoans.add(loan); }
+        private void removeActiveLoan(Loan loan) { activeLoans.remove(loan); }
+    }
+
+    static class StudentMember extends LibraryMember {
+        private static final int MAX_BOOKS = 3;
+        private static final int LOAN_DAYS = 14;
+
+        StudentMember(String id, String name) { super(id, name); }
+
+        @Override public int getMaxBooks() { return MAX_BOOKS; }
+        @Override public int getLoanDays() { return LOAN_DAYS; }
+    }
+
+    static class FacultyMember extends LibraryMember {
+        private static final int MAX_BOOKS = 10;
+        private static final int LOAN_DAYS = 90;
+
+        FacultyMember(String id, String name) { super(id, name); }
+
+        @Override public int getMaxBooks() { return MAX_BOOKS; }
+        @Override public int getLoanDays() { return LOAN_DAYS; }
+    }
+
+    static class Book {
+        private final String isbn;
+        private final String title;
+        private final String author;
+        private final int totalCopies;
+        private int availableCopies;
+        private final Queue<LibraryMember> reservationQueue = new ArrayDeque<>();
+
+        Book(String isbn, String title, String author, int totalCopies) {
+            if (isbn == null || isbn.isBlank()) throw new IllegalArgumentException("ISBN is required.");
+            if (title == null || title.isBlank()) throw new IllegalArgumentException("Book title is required.");
+            if (author == null || author.isBlank()) throw new IllegalArgumentException("Author is required.");
+            if (totalCopies < 1) throw new IllegalArgumentException("Total copies must be at least 1.");
+            this.isbn = isbn;
+            this.title = title;
+            this.author = author;
+            this.totalCopies = totalCopies;
+            this.availableCopies = totalCopies;
+        }
+
+        public String getIsbn() { return isbn; }
+        public String getTitle() { return title; }
+        public String getAuthor() { return author; }
+        public int getTotalCopies() { return totalCopies; }
+        public int getAvailableCopies() { return availableCopies; }
+        public Queue<LibraryMember> getReservationQueue() {
+            return new ArrayDeque<>(reservationQueue);
+        }
+
+        private void issueCopy() {
+            if (availableCopies <= 0) throw new IllegalStateException("No copies available.");
+            availableCopies--;
+        }
+
+        private String acceptReturnedCopyAndReserveNext() {
+            if (availableCopies >= totalCopies) {
+                throw new IllegalStateException("Return would exceed the total copy count.");
+            }
+            availableCopies++;
+            if (!reservationQueue.isEmpty()) {
+                LibraryMember next = reservationQueue.poll();
+                // Immediately hold the returned copy for the next member.
+                availableCopies--;
+                return "\"" + title + "\" is on hold for " + next.getName()
+                        + " (" + next.getMemberId() + ").";
+            }
+            return null;
+        }
+    }
+
+    static class Loan {
+        private static int nextId = 1;
+
+        private final String loanId;
+        private final LibraryMember member;
+        private final Book book;
+        private final LocalDate borrowDate;
+        private final LocalDate dueDate;
+        private LocalDate returnDate;
+        private long finePaidOrOwed;
+
+        Loan(LibraryMember member, Book book, LocalDate borrowDate) {
+            this.loanId = "L" + String.format("%04d", nextId++);
+            this.member = member;
+            this.book = book;
+            this.borrowDate = borrowDate;
+            this.dueDate = borrowDate.plusDays(member.getLoanDays());
+        }
+
+        public String getLoanId() { return loanId; }
+        public LibraryMember getMember() { return member; }
+        public Book getBook() { return book; }
+        public LocalDate getBorrowDate() { return borrowDate; }
+        public LocalDate getDueDate() { return dueDate; }
+        public LocalDate getReturnDate() { return returnDate; }
+        public boolean isReturned() { return returnDate != null; }
+        public long getFinePaidOrOwed() { return finePaidOrOwed; }
+
+        private void completeReturn(LocalDate date, long fine) {
+            if (isReturned()) throw new IllegalStateException("Loan has already been returned.");
+            this.returnDate = date;
+            this.finePaidOrOwed = fine;
+        }
+    }
+
+    // ---------- Fine calculation and custom exceptions ----------
+
+    static class FineCalculator {
+        private static final long FIRST_TIER_DAYS = 7L;
+        private static final long FIRST_TIER_RATE = 2L;
+        private static final long SECOND_TIER_RATE = 5L;
+
+        static long calculateFine(LocalDate dueDate, LocalDate returnDate) {
+            if (returnDate.isBefore(dueDate.minusYears(100))) {
+                throw new IllegalArgumentException("Invalid date.");
+            }
+            long overdueDays = Math.max(0L, ChronoUnit.DAYS.between(dueDate, returnDate));
+            long firstTierDays = Math.min(overdueDays, FIRST_TIER_DAYS);
+            long secondTierDays = Math.max(0L, overdueDays - FIRST_TIER_DAYS);
+            return firstTierDays * FIRST_TIER_RATE + secondTierDays * SECOND_TIER_RATE;
+        }
+    }
+
+    static class BookUnavailableException extends Exception {
+        BookUnavailableException(String message) { super(message); }
+    }
+
+    static class MaxFineThresholdExceededException extends Exception {
+        MaxFineThresholdExceededException(String message) { super(message); }
+    }
+
+    static class ReturnResult {
+        final long overdueDays;
+        final long fine;
+        final String reservationMessage;
+
+        ReturnResult(long overdueDays, long fine, String reservationMessage) {
+            this.overdueDays = overdueDays;
+            this.fine = fine;
+            this.reservationMessage = reservationMessage;
+        }
+    }
+}
